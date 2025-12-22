@@ -46,29 +46,32 @@ function getAudioContext(): AudioContext {
 
 export function playDegree(degree: number): void {
   const ctx = getAudioContext();
+
+  // Resume if suspended (handles browser autoplay policy)
+  if (ctx.state === 'suspended') {
+    ctx.resume();
+  }
+
   const frequency = getFrequency(degree, config.key);
 
   // Create oscillator
   const oscillator = ctx.createOscillator();
   oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+  oscillator.frequency.value = frequency;
 
-  // Create envelope
+  // Create gain
   const gainNode = ctx.createGain();
-  const now = ctx.currentTime;
-  const attackTime = 0.01;
-  const decayTime = 0.5;
-
-  gainNode.gain.setValueAtTime(0, now);
-  gainNode.gain.linearRampToValueAtTime(0.3, now + attackTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.001, now + attackTime + decayTime);
+  gainNode.gain.value = 0.3;
 
   // Connect and play
   oscillator.connect(gainNode);
   gainNode.connect(ctx.destination);
 
-  oscillator.start(now);
-  oscillator.stop(now + attackTime + decayTime + 0.1);
+  oscillator.start();
+
+  // Fade out
+  gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+  oscillator.stop(ctx.currentTime + 0.6);
 }
 
 export function resumeAudio(): void {

@@ -6,6 +6,7 @@ import {
   decayTension,
   getNodeVisuals,
   getResolutionHints,
+  tonicDegrees,
   config,
   type SystemState,
   type ResolutionEvent,
@@ -60,6 +61,7 @@ function getNodeColor(stability: number, hintStrength: number = 0): string {
 }
 
 function onNodeClick(degree: number) {
+  resumeAudio(); // Ensure audio context is active
   playDegree(degree);
   const resolutions = activateDegree(state, degree);
 
@@ -86,8 +88,25 @@ function triggerResolutionFeedback(event: ResolutionEvent) {
   }
 }
 
+function updateBackground() {
+  const tension = state.globalTension;
+  // Cool dark blue at rest, warm amber at high tension
+  const r = Math.round(10 + tension * 25);
+  const g = Math.round(10 + tension * 8);
+  const b = Math.round(15 - tension * 10);
+  document.body.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+}
+
 function updateVisuals() {
+  updateBackground();
   const hints = getResolutionHints(state);
+  const time = performance.now() / 1000;
+
+  // Tonic breathing: when tension exists, home "calls"
+  const tonicBreathIntensity = state.globalTension > 0.1 ? state.globalTension : 0;
+  const tonicBreath = tonicBreathIntensity > 0
+    ? Math.sin(time * 1.5) * 0.5 + 0.5  // 0 to 1 oscillation, slow breath
+    : 0;
 
   for (const [degree, node] of state.nodes) {
     const element = nodeElements.get(degree);
@@ -96,26 +115,32 @@ function updateVisuals() {
     const circle = element.querySelector('circle')!;
     const { currentSize, glowIntensity, motionAmplitude } = getNodeVisuals(node);
     const hintStrength = hints.get(degree) ?? 0;
+    const isTonic = tonicDegrees.includes(degree);
 
-    circle.setAttribute('r', String(currentSize));
-    circle.setAttribute('fill', getNodeColor(node.stability, hintStrength));
+    let finalSize = currentSize;
+    let finalOpacity = 0.3 + glowIntensity * 0.7;
 
-    // Apply glow via opacity - boost if this node is a resolution target
-    const baseOpacity = 0.3 + glowIntensity * 0.7;
-    const hintBoost = hintStrength * 0.3;
-    circle.style.opacity = String(Math.min(1, baseOpacity + hintBoost));
-
-    // Subtle pulse effect for hinted nodes
+    // Resolution hint effect
     if (hintStrength > 0.1) {
-      const time = performance.now() / 1000;
       const hintPulse = 1 + Math.sin(time * 3) * 0.05 * hintStrength;
-      const hintedSize = currentSize * hintPulse;
-      circle.setAttribute('r', String(hintedSize));
+      finalSize *= hintPulse;
+      finalOpacity = Math.min(1, finalOpacity + hintStrength * 0.3);
     }
 
-    // Apply motion by adjusting circle position
+    // Tonic breathing: synchronized gentle pulse when tension exists elsewhere
+    if (isTonic && tonicBreathIntensity > 0 && node.tension < 0.1) {
+      const breathScale = 1 + tonicBreath * 0.08 * tonicBreathIntensity;
+      const breathGlow = tonicBreath * 0.2 * tonicBreathIntensity;
+      finalSize *= breathScale;
+      finalOpacity = Math.min(1, finalOpacity + breathGlow);
+    }
+
+    circle.setAttribute('r', String(finalSize));
+    circle.setAttribute('fill', getNodeColor(node.stability, hintStrength));
+    circle.style.opacity = String(finalOpacity);
+
+    // Apply motion by adjusting circle position (for tense nodes)
     if (motionAmplitude > 0.01) {
-      const time = performance.now() / 1000;
       const offsetX = Math.sin(time * 2 + degree) * motionAmplitude;
       const offsetY = Math.cos(time * 2.5 + degree * 0.7) * motionAmplitude;
       circle.setAttribute('cx', String(node.x + offsetX));

@@ -67,6 +67,9 @@ export type NodeState = {
   stability: number;
 };
 
+// Tonic degrees - the "home" zone
+export const tonicDegrees = [1, 3, 5];
+
 export const nodePositions: Record<number, { x: number; y: number }> = {
   1: { x: 50, y: 50 },
   3: { x: 35, y: 45 },
