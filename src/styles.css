@@ -1,0 +1,45 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a0f;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#canvas {
+  width: 100vmin;
+  height: 100vmin;
+  max-width: 800px;
+  max-height: 800px;
+}
+
+.node {
+  cursor: pointer;
+}
+
+.node circle {
+  transition: r 0.15s ease-out, filter 0.15s ease-out;
+}
+
+.node:hover circle {
+  opacity: 1 !important;
+}
+
+.resolved-target circle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pulse 0.2s ease-out;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
