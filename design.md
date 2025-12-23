@@ -243,6 +243,140 @@ function updateNodeVisuals() {
 
 ⸻
 
+5.8 Musical Forces (Emotional Visualization)
+
+Based on Steve Larson's Musical Forces theory and Lerdahl's Tonal Pitch Space model,
+we visualize the emotional consequence of each potential note through color, not path lines.
+
+Theory Foundation
+
+Three forces act on melodic motion (Larson, 2012):
+
+1. Gravity: Notes above stable positions tend to descend
+2. Magnetism: Unstable notes are pulled toward nearest stable pitch (stronger when closer)
+3. Inertia: Motion tends to continue in its current direction/pattern
+
+Lerdahl's model adds:
+- Stability hierarchy: 1 > 5 > 3 > 2,4,6 > 7
+- Attraction formula: 1/n² (inverse square of intervallic distance)
+- Tension: Built from instability + distance from tonic + unresolved dissonance
+
+Force Calculation
+
+For each node, calculate forces based on current musical context:
+
+type MusicalForces = {
+  magnetism: number;   // -1 to 1: How much this note is "pulled to" as resolution
+  inertia: number;     // -1 to 1: How much this continues current momentum
+  gravity: number;     // -1 to 1: Downward pull (positive = descending toward stable)
+  tension: number;     // 0 to 1: How much tension this would create
+};
+
+function calculateForces(targetDegree: number, state: SystemState): MusicalForces {
+  const fields = state.fields;
+
+  // Magnetism: Is this note a resolution target for existing tension?
+  let magnetism = 0;
+  for (rule of resolutionRules where rule.to === targetDegree) {
+    const unresolvedAmount = state.unresolvedTensions.get(rule.from) ?? 0;
+    magnetism += unresolvedAmount * rule.pullStrength;
+  }
+  magnetism = clamp(magnetism, 0, 1);
+
+  // Inertia: Does this continue the current melodic direction?
+  let inertia = 0;
+  if (fields.lastNote !== null) {
+    const interval = targetDegree - fields.lastNote;
+    const wrappedInterval = wrapInterval(interval); // Handle octave wrapping
+    const sameDirection = (fields.melodicMomentum > 0 && wrappedInterval > 0) ||
+                          (fields.melodicMomentum < 0 && wrappedInterval < 0);
+    inertia = sameDirection ? Math.abs(fields.melodicMomentum) : -Math.abs(fields.melodicMomentum) * 0.5;
+  }
+
+  // Gravity: Tendency toward lower stable pitches
+  const stabilityOfTarget = degreeProfiles[targetDegree].inherentStability;
+  const isDescending = fields.lastNote !== null && targetDegree < fields.lastNote;
+  gravity = isDescending ? stabilityOfTarget * 0.5 : 0;
+
+  // Tension: How much instability would this create?
+  tension = 1 - stabilityOfTarget;
+
+  return { magnetism, inertia, gravity, tension };
+}
+
+Color Mapping
+
+Forces map to colors that express emotional consequence:
+
+| Force         | Color        | Meaning                          |
+|---------------|--------------|----------------------------------|
+| Magnetism     | Warm gold    | Resolution awaits, relief        |
+| Inertia+      | Cool blue    | Smooth continuation, flow        |
+| Inertia-      | Warm pink    | Against the grain, surprise      |
+| Gravity       | Soft green   | Grounding, descent to stability  |
+| Tension       | Deep purple  | Drama building, expectation      |
+
+function getForceColor(forces: MusicalForces): HSL {
+  // Blend colors based on dominant force
+  let hue = 0, saturation = 0, lightness = 50;
+
+  // Start with base (neutral)
+  // Layer in each force's color contribution
+
+  if (forces.magnetism > 0.3) {
+    // Gold: hue 45
+    hue = blend(hue, 45, forces.magnetism);
+    saturation += forces.magnetism * 70;
+  }
+
+  if (forces.inertia > 0.2) {
+    // Blue: hue 210
+    hue = blend(hue, 210, forces.inertia * 0.8);
+    saturation += forces.inertia * 50;
+  } else if (forces.inertia < -0.2) {
+    // Pink: hue 330
+    hue = blend(hue, 330, Math.abs(forces.inertia) * 0.6);
+    saturation += Math.abs(forces.inertia) * 40;
+  }
+
+  if (forces.tension > 0.5) {
+    // Purple: hue 280
+    hue = blend(hue, 280, forces.tension * 0.7);
+    saturation += forces.tension * 60;
+  }
+
+  if (forces.gravity > 0.3) {
+    // Green: hue 120
+    hue = blend(hue, 120, forces.gravity * 0.5);
+  }
+
+  return { h: hue, s: clamp(saturation, 30, 90), l: lightness };
+}
+
+Visual Application
+
+All 7 nodes are always visible and interactive.
+Color dynamically reflects the emotional consequence of going to each note.
+No path lines — color IS the guidance.
+
+Example scenarios:
+
+1. After playing 7 (leading tone):
+   - Node 1 glows GOLD (magnetism high — resolution!)
+   - Node 6 glows PINK (against expectation — deceptive)
+   - Other nodes show tension colors
+
+2. After ascending run (1→2→3→4):
+   - Node 5 glows BLUE (inertia continues upward)
+   - Node 3 glows PINK (going back against momentum)
+   - Node 7 glows PURPLE (tension building)
+
+3. At rest (no prior context):
+   - All nodes show their inherent stability as brightness
+   - Minimal color tinting until motion begins
+
+⸻
+
 6. Visual Mapping Rules
 
 6.1 Initial State (At Rest)
