@@ -13,7 +13,7 @@ import {
   type State,
   type Resolution,
 } from './engine';
-import { playDegree, playChord, initAudio, startMicrophoneTracking, stopMicrophoneTracking } from './audio';
+import { playDegree, playChord, initAudio, startMicrophoneTracking, stopMicrophoneTracking, setChordMode, getChordMode, initEssentia, loadChordModel } from './audio';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -51,40 +51,86 @@ let burningLight: SVGGElement | null = null;
 let currentPitchHz: number | null = null;
 let lastPitchPos: { x: number; y: number } | null = null;
 let lastValidPitchTime = 0;
-let lastStableHz: number | null = null;
 
 // Dwell tracking - trigger note when holding pitch
 let dwellDegree: number | null = null;
 let dwellStartTime = 0;
-const DWELL_THRESHOLD_MS = 300; // How long to hold before triggering
+const DWELL_THRESHOLD_MS = 150; // How long to hold before triggering
 
-// Root frequencies for each key (middle octave)
+// Chord mode - detected degrees
+let detectedChordDegrees: number[] = [];
+
+// Detected chord name display
+let chordNameElement: HTMLDivElement | null = null;
+
+// Chromatic note - adjacent degrees that could resolve to
+let chromaticAdjacentDegrees: number[] = [];
+
+// Root frequencies for each key (middle octave) - all chromatic keys
 const rootFrequencies: Record<string, number> = {
-  C: 261.63,
-  D: 293.66,
-  E: 329.63,
-  F: 349.23,
-  G: 392.0,
-  A: 440.0,
-  B: 493.88,
+  'C': 261.63,
+  'C#': 277.18,
+  'Db': 277.18,
+  'D': 293.66,
+  'D#': 311.13,
+  'Eb': 311.13,
+  'E': 329.63,
+  'F': 349.23,
+  'F#': 369.99,
+  'Gb': 369.99,
+  'G': 392.0,
+  'G#': 415.30,
+  'Ab': 415.30,
+  'A': 440.0,
+  'A#': 466.16,
+  'Bb': 466.16,
+  'B': 493.88,
 };
+
+// Key cycles - what each natural key cycles through when pressed repeatedly
+const keyCycles: Record<string, string[]> = {
+  'C': ['C', 'C#'],
+  'D': ['D', 'Db'],
+  'E': ['E', 'Eb'],
+  'F': ['F', 'F#'],
+  'G': ['G', 'Gb'],
+  'A': ['A', 'Ab'],
+  'B': ['B', 'Bb'],
+};
+
+// Track current key cycle index for each natural key
+const keyCycleIndex: Record<string, number> = {
+  'C': 0, 'D': 0, 'E': 0, 'F': 0, 'G': 0, 'A': 0, 'B': 0,
+};
+
+// Key indicator element
+let keyIndicator: HTMLDivElement | null = null;
 
 function getRootHz(): number {
   return rootFrequencies[config.key] || 261.63;
 }
 
+// Result type for pitch position
+type PitchPosition = {
+  x: number;
+  y: number;
+  inKey: boolean;
+  degree: number | null;
+  adjacentDegrees: number[]; // For chromatic notes: the two scale degrees it sits between
+};
+
 // Convert Hz to continuous position in radial space
-function hzToPosition(hz: number): { x: number; y: number; inKey: boolean; degree: number | null } {
+function hzToPosition(hz: number): PitchPosition {
   // Guard against invalid Hz
   if (!hz || hz <= 0 || !isFinite(hz)) {
-    return { x: 50, y: 50, inKey: true, degree: null }; // Default to center
+    return { x: 50, y: 50, inKey: true, degree: null, adjacentDegrees: [] };
   }
 
   // Convert Hz to semitones from C
   const semitones = 12 * Math.log2(hz / getRootHz());
 
   if (!isFinite(semitones)) {
-    return { x: 50, y: 50, inKey: true, degree: null };
+    return { x: 50, y: 50, inKey: true, degree: null, adjacentDegrees: [] };
   }
 
   // Normalize to one octave (0-12)
@@ -107,42 +153,49 @@ function hzToPosition(hz: number): { x: number; y: number; inKey: boolean; degre
     { semi: 11, degree: 7 },  // B
   ];
 
-  // Find the closest scale degree and distance to it
-  let closestDegree = scaleDegrees[0];
-  let closestDist = 12;
+  // Find lower and upper adjacent scale degrees
+  let lowerDegree = scaleDegrees[scaleDegrees.length - 1]; // B (wraps from C)
+  let upperDegree = scaleDegrees[0]; // C
 
-  for (const sd of scaleDegrees) {
-    let dist = Math.abs(octaveSemitones - sd.semi);
-    if (dist > 6) dist = 12 - dist; // Handle wrap-around
-    if (dist < closestDist) {
-      closestDist = dist;
-      closestDegree = sd;
+  for (let i = 0; i < scaleDegrees.length; i++) {
+    if (scaleDegrees[i].semi <= octaveSemitones) {
+      lowerDegree = scaleDegrees[i];
+      upperDegree = scaleDegrees[(i + 1) % scaleDegrees.length];
     }
   }
 
-  // "In tune" if within ~25 cents (0.25 semitones)
-  const inKey = closestDist < 0.25;
+  // Calculate distance to lower degree
+  let distToLower = octaveSemitones - lowerDegree.semi;
+  if (distToLower < 0) distToLower += 12; // Handle wrap
 
-  // Get position of closest note
-  const targetPos = nodePositions[closestDegree.degree];
+  // Gap between the two scale degrees
+  let gap = upperDegree.semi - lowerDegree.semi;
+  if (gap <= 0) gap += 12; // Handle wrap (B to C)
 
-  // Snap to node when in tune, push outward when off
+  // How far between the two degrees (0 = at lower, 1 = at upper)
+  const t = distToLower / gap;
+
+  // Check if we're close enough to snap to a scale degree
+  const distToNearest = Math.min(distToLower, gap - distToLower);
+  const inKey = distToNearest < 0.25;
+
   if (inKey) {
-    return { x: targetPos.x, y: targetPos.y, inKey: true, degree: closestDegree.degree };
+    // Snap to the nearest scale degree
+    const nearestDegree = distToLower < (gap - distToLower) ? lowerDegree : upperDegree;
+    const pos = nodePositions[nearestDegree.degree];
+    return { x: pos.x, y: pos.y, inKey: true, degree: nearestDegree.degree, adjacentDegrees: [] };
   }
 
-  // Push outward from target based on how out-of-tune
-  const centerX = 50, centerY = 50;
-  const dx = targetPos.x - centerX;
-  const dy = targetPos.y - centerY;
-
-  const pushFactor = 1 + closestDist * 0.6;
+  // Chromatic note: interpolate position between the two adjacent scale degrees
+  const lowerPos = nodePositions[lowerDegree.degree];
+  const upperPos = nodePositions[upperDegree.degree];
 
   return {
-    x: centerX + dx * pushFactor,
-    y: centerY + dy * pushFactor,
+    x: lowerPos.x + (upperPos.x - lowerPos.x) * t,
+    y: lowerPos.y + (upperPos.y - lowerPos.y) * t,
     inKey: false,
-    degree: null
+    degree: null,
+    adjacentDegrees: [lowerDegree.degree, upperDegree.degree]
   };
 }
 
@@ -193,8 +246,48 @@ function updateParticles(deltaTime: number) {
   }
 }
 
-function init() {
+async function init() {
   state = createInitialState();
+
+  // Initialize Essentia.js for chord detection (async WASM load)
+  initEssentia().then(ready => {
+    if (ready) console.log('Essentia ready for chord detection');
+  });
+
+  // Load trained chord model
+  loadChordModel().then(ready => {
+    if (ready) console.log('Trained chord model loaded!');
+  });
+
+  // Create chord name display element
+  chordNameElement = document.createElement('div');
+  chordNameElement.id = 'chord-name';
+  chordNameElement.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: 'Georgia', serif;
+    font-size: 72px;
+    font-weight: normal;
+    color: rgba(255, 255, 255, 0);
+    text-shadow:
+      0 0 20px rgba(255, 200, 100, 0.5),
+      0 0 40px rgba(255, 200, 100, 0.3),
+      0 0 60px rgba(255, 200, 100, 0.2);
+    pointer-events: none;
+    user-select: none;
+    transition: color 0.3s ease-out, text-shadow 0.3s ease-out;
+    z-index: 100;
+  `;
+  document.body.appendChild(chordNameElement);
+
+  // Create key indicator element
+  keyIndicator = document.createElement('div');
+  keyIndicator.id = 'key-indicator';
+  keyIndicator.textContent = config.key;
+  document.body.appendChild(keyIndicator);
+
   const canvas = document.getElementById('canvas') as unknown as SVGSVGElement;
 
   // Create glitter layer (behind nodes)
@@ -286,24 +379,60 @@ function init() {
         console.log('Mic OFF');
       } else {
         initAudio();
-        const success = await startMicrophoneTracking((hz) => {
+        const success = await startMicrophoneTracking((hz, chordDegrees, chordName, chordQuality) => {
           currentPitchHz = hz;
+          detectedChordDegrees = chordDegrees;
+          updateChordDisplay(chordName, chordQuality);
         });
         if (success) {
           micActive = true;
           burningLight!.style.display = 'block';
           console.log('Mic ON - sing or play an instrument!');
+          console.log('Press P to toggle chord detection mode');
         }
       }
     }
 
-    // Key change (1-7 or C,D,E,F,G,A,B)
+    // Key change (C,D,E,F,G,A,B - but not P which toggles chord mode)
     const keyUpper = e.key.toUpperCase();
-    if (keys.includes(keyUpper)) {
-      config.key = keyUpper;
+    if (keys.includes(keyUpper) && keyUpper !== 'P') {
+      const cycle = keyCycles[keyUpper];
+      const currentKey = config.key;
+
+      // Check if we're already on this key's cycle
+      const currentIndexInCycle = cycle.indexOf(currentKey);
+      if (currentIndexInCycle !== -1) {
+        // Same key pressed - cycle to next variant
+        keyCycleIndex[keyUpper] = (currentIndexInCycle + 1) % cycle.length;
+      } else {
+        // Different key pressed - start at natural (index 0)
+        keyCycleIndex[keyUpper] = 0;
+      }
+
+      config.key = cycle[keyCycleIndex[keyUpper]];
       state = createInitialState(); // Reset state for new key
+      updateKeyIndicator();
       updateVisuals();
       console.log('Key changed to:', config.key);
+    }
+
+    // Chord mode toggle
+    if (e.key === 'p' || e.key === 'P') {
+      const newMode = !getChordMode();
+      setChordMode(newMode);
+      detectedChordDegrees = [];
+      updateModeIndicator(newMode);
+      // Clear chord display immediately when switching to pitch mode
+      if (!newMode) {
+        if (chordFadeTimeout) {
+          clearTimeout(chordFadeTimeout);
+          chordFadeTimeout = null;
+        }
+        if (chordNameElement) {
+          chordNameElement.style.color = 'rgba(255, 255, 255, 0)';
+        }
+        lastDisplayedChord = null;
+      }
     }
   });
 
@@ -369,6 +498,87 @@ function updateBackground() {
   document.body.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
 }
 
+function updateModeIndicator(chordMode: boolean) {
+  const indicator = document.getElementById('mode-indicator');
+  if (indicator) {
+    indicator.textContent = chordMode ? 'C' : 'P';
+    indicator.classList.toggle('chord-mode', chordMode);
+  }
+}
+
+function updateKeyIndicator() {
+  if (keyIndicator) {
+    keyIndicator.textContent = config.key;
+    // Add/remove accidental class for styling
+    const hasAccidental = config.key.includes('#') || config.key.includes('b');
+    keyIndicator.classList.toggle('has-accidental', hasAccidental);
+  }
+}
+
+let lastDisplayedChord: string | null = null;
+let chordFadeTimeout: number | null = null;
+
+function updateChordDisplay(chordName: string | null, quality: string | null) {
+  if (!chordNameElement) return;
+
+  if (chordName && chordName !== lastDisplayedChord) {
+    // New chord detected - show it
+    chordNameElement.textContent = chordName;
+    chordNameElement.style.color = 'rgba(255, 255, 255, 0.9)';
+
+    // Color based on chord quality
+    if (quality === 'minor') {
+      // Minor chord - cooler blue
+      chordNameElement.style.textShadow = `
+        0 0 20px rgba(150, 180, 255, 0.6),
+        0 0 40px rgba(150, 180, 255, 0.4),
+        0 0 60px rgba(150, 180, 255, 0.2)
+      `;
+    } else if (quality === 'dim') {
+      // Diminished - purple/mysterious
+      chordNameElement.style.textShadow = `
+        0 0 20px rgba(200, 100, 255, 0.6),
+        0 0 40px rgba(200, 100, 255, 0.4),
+        0 0 60px rgba(200, 100, 255, 0.2)
+      `;
+    } else if (quality === '7') {
+      // 7th chord - warm orange
+      chordNameElement.style.textShadow = `
+        0 0 20px rgba(255, 150, 100, 0.6),
+        0 0 40px rgba(255, 150, 100, 0.4),
+        0 0 60px rgba(255, 150, 100, 0.2)
+      `;
+    } else {
+      // Major chord - bright gold
+      chordNameElement.style.textShadow = `
+        0 0 20px rgba(255, 220, 100, 0.6),
+        0 0 40px rgba(255, 220, 100, 0.4),
+        0 0 60px rgba(255, 220, 100, 0.2)
+      `;
+    }
+
+    lastDisplayedChord = chordName;
+
+    // Clear any pending fade
+    if (chordFadeTimeout) {
+      clearTimeout(chordFadeTimeout);
+    }
+  }
+
+  if (!chordName && lastDisplayedChord) {
+    // Chord stopped - start fade out after delay
+    if (!chordFadeTimeout) {
+      chordFadeTimeout = window.setTimeout(() => {
+        if (chordNameElement) {
+          chordNameElement.style.color = 'rgba(255, 255, 255, 0)';
+        }
+        lastDisplayedChord = null;
+        chordFadeTimeout = null;
+      }, 500); // Hold for 500ms before fading
+    }
+  }
+}
+
 function updateVisuals() {
   updateBackground();
   const time = performance.now() / 1000;
@@ -396,15 +606,34 @@ function updateVisuals() {
       opacity = Math.min(1, opacity + tension * 0.3);
     }
 
+    // Chord mode: highlight detected degrees
+    const isChordNote = getChordMode() && detectedChordDegrees.includes(degree);
+    if (isChordNote) {
+      opacity = 1;
+    }
+
+    // Chromatic note: glow adjacent degrees (resolution targets)
+    const isResolutionTarget = chromaticAdjacentDegrees.includes(degree);
+    if (isResolutionTarget) {
+      opacity = Math.min(1, opacity + 0.3);
+    }
+
     // Tonic breathing when tension exists elsewhere
+    let finalSize = size;
     if (degree === 1 && totalTension > 0.1 && tension < 0.1) {
       const breath = Math.sin(time * 1.5) * 0.5 + 0.5;
       const breathScale = 1 + breath * 0.08 * totalTension;
-      circle.setAttribute('r', String(size * breathScale));
+      finalSize = size * breathScale;
       opacity = Math.min(1, opacity + breath * 0.15 * totalTension);
-    } else {
-      circle.setAttribute('r', String(size));
     }
+
+    // Chord mode: pulse detected notes
+    if (isChordNote) {
+      const pulse = Math.sin(time * 4) * 0.5 + 0.5;
+      finalSize = size * (1.1 + pulse * 0.15);
+    }
+
+    circle.setAttribute('r', String(finalSize));
 
     // Motion for tense nodes
     if (tension > 0.1) {
@@ -503,7 +732,17 @@ function updateBurningLight() {
     dwellDegree = null;
   }
 
-  const pos = { ...rawPos };
+  // Track adjacent degrees for chromatic notes (for resolution glow)
+  chromaticAdjacentDegrees = rawPos.adjacentDegrees;
+
+  let pos = { ...rawPos };
+
+  // Add subtle wobble for chromatic notes
+  if (!rawPos.inKey && rawPos.adjacentDegrees.length > 0) {
+    const wobble = Math.sin(now * 0.015) * 0.8;
+    pos.x += wobble;
+    pos.y += Math.cos(now * 0.012) * 0.5;
+  }
 
   // Smooth movement (but snap when close)
   const smoothing = 0.25;

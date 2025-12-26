@@ -1,0 +1,101 @@
+{
+  "modelTopology": {
+    "class_name": "Sequential",
+    "config": {
+      "name": "sequential",
+      "layers": [
+        {
+          "class_name": "Dense",
+          "config": {
+            "units": 64,
+            "activation": "relu",
+            "use_bias": true,
+            "kernel_initializer": {"class_name": "HeNormal", "config": {"seed": null}},
+            "bias_initializer": {"class_name": "Zeros", "config": {}},
+            "kernel_regularizer": null,
+            "bias_regularizer": null,
+            "activity_regularizer": null,
+            "kernel_constraint": null,
+            "bias_constraint": null,
+            "name": "dense",
+            "trainable": true,
+            "batch_input_shape": [null, 12],
+            "dtype": "float32"
+          }
+        },
+        {
+          "class_name": "Dropout",
+          "config": {
+            "rate": 0.3,
+            "noise_shape": null,
+            "seed": null,
+            "name": "dropout",
+            "trainable": true
+          }
+        },
+        {
+          "class_name": "Dense",
+          "config": {
+            "units": 32,
+            "activation": "relu",
+            "use_bias": true,
+            "kernel_initializer": {"class_name": "HeNormal", "config": {"seed": null}},
+            "bias_initializer": {"class_name": "Zeros", "config": {}},
+            "kernel_regularizer": null,
+            "bias_regularizer": null,
+            "activity_regularizer": null,
+            "kernel_constraint": null,
+            "bias_constraint": null,
+            "name": "dense_1",
+            "trainable": true
+          }
+        },
+        {
+          "class_name": "Dropout",
+          "config": {
+            "rate": 0.2,
+            "noise_shape": null,
+            "seed": null,
+            "name": "dropout_1",
+            "trainable": true
+          }
+        },
+        {
+          "class_name": "Dense",
+          "config": {
+            "units": 7,
+            "activation": "sigmoid",
+            "use_bias": true,
+            "kernel_initializer": {"class_name": "GlorotUniform", "config": {"seed": null}},
+            "bias_initializer": {"class_name": "Zeros", "config": {}},
+            "kernel_regularizer": null,
+            "bias_regularizer": null,
+            "activity_regularizer": null,
+            "kernel_constraint": null,
+            "bias_constraint": null,
+            "name": "dense_2",
+            "trainable": true
+          }
+        }
+      ]
+    },
+    "keras_version": "tfjs-layers 4.20.0",
+    "backend": "tensor_flow.js"
+  },
+  "format": "layers-model",
+  "generatedBy": "TensorFlow.js tfjs-layers v4.20.0",
+  "convertedBy": null,
+  "weightsManifest": [
+    {
+      "paths": ["chord-model.weights.bin"],
+      "weights": [
+        {"name": "dense/kernel", "shape": [12, 64], "dtype": "float32"},
+        {"name": "dense/bias", "shape": [64], "dtype": "float32"},
+        {"name": "dense_1/kernel", "shape": [64, 32], "dtype": "float32"},
+        {"name": "dense_1/bias", "shape": [32], "dtype": "float32"},
+        {"name": "dense_2/kernel", "shape": [32, 7], "dtype": "float32"},
+        {"name": "dense_2/bias", "shape": [7], "dtype": "float32"}
+      ]
+    }
+  ]
+}
